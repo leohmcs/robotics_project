@@ -6,7 +6,7 @@
   <arg name="debug" default="false"/>
   <arg name="verbose" default="true"/>
   <arg name="recording" default="false"/>
-  <arg name="public_sim"     default="True"/>
+  <arg name="public_sim"     default="true"/>
   <arg name="sim_sufix"     value="_public_sim"     if="$(arg public_sim)"/>
   <arg name="robot" default="steel"/>
 
@@ -48,7 +48,7 @@
   </node>
   
   <!-- RVIZ -->
-  <node name="rviz" pkg="rviz" type="rviz" args="-d $(find tiago_2dnav)/config/rviz/navigation$(arg sim_sufix).rviz"/> 
+  <node name="rviz" pkg="rviz" type="rviz" required="true" args="-d $(find tiago_2dnav)/config/rviz/navigation$(arg sim_sufix).rviz"/> 
 
 </launch>
 

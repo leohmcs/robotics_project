@@ -46,7 +46,6 @@ class NavPosesPublisher(object):
         
         # Main loop
         while not rospy.is_shutdown():
-
             pick_pose_msg.header.stamp = rospy.Time.now()
             place_pose_msg.header.stamp = rospy.Time.now()
             

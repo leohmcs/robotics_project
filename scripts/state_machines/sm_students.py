@@ -15,6 +15,8 @@ from actionlib import SimpleActionClient
 from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
 from nav_msgs.msg import Odometry
 
+from tf.transformations import euler_from_quaternion
+
 from moveit_msgs.msg import MoveItErrorCodes
 moveit_error_dict = {}
 for name in MoveItErrorCodes.__dict__.keys():
@@ -26,15 +28,36 @@ class StateMachine(object):
     def __init__(self):
         
         self.node_name = "Student SM"
+        self.states_dict = {0: 'pick object', 1: 'go to place pose', 2: 'place object'}
+
+        self.robot_pose = None
+        self.robot_vel = None
+
+        self.pick_pose = None
+        self.place_pose = None
 
         # Access rosparams
         self.cmd_vel_top = rospy.get_param(rospy.get_name() + '/cmd_vel_topic')
         self.mv_head_srv_nm = rospy.get_param(rospy.get_name() + '/move_head_srv')
+        self.pick_srv_name = rospy.get_param(rospy.get_name() + '/pick_srv')
+        self.place_srv_name = rospy.get_param(rospy.get_name() + '/place_srv')
 
         # Subscribe to topics
+        self.odom_top = '/ground_truth_odom'
+        self.pick_pose_top = rospy.get_param(rospy.get_name() + '/pick_pose_topic')
+        self.place_pose_top = rospy.get_param(rospy.get_name() + '/place_pose_topic')
+
+        self.odom_sub = rospy.Subscriber(self.odom_top, Odometry, self.odom_cb)
+        self.pick_pose_sub = rospy.Subscriber(self.pick_pose_top, PoseStamped, callback=self.pick_pose_cb)
+        self.place_pose_sub = rospy.Subscriber(self.place_pose_top, PoseStamped, callback=self.place_pose_cb)
 
         # Wait for service providers
         rospy.wait_for_service(self.mv_head_srv_nm, timeout=30)
+        self.move_head_srv = rospy.ServiceProxy(self.mv_head_srv_nm, MoveHead)
+        rospy.wait_for_service(self.pick_srv_name, timeout=30)
+        self.pick_srv = rospy.ServiceProxy(self.pick_srv_name, SetBool)
+        rospy.wait_for_service(self.place_srv_name, timeout=30)
+        self.place_srv = rospy.ServiceProxy(self.place_srv_name, SetBool)
 
         # Instantiate publishers
         self.cmd_vel_pub = rospy.Publisher(self.cmd_vel_top, Twist, queue_size=10)
@@ -47,102 +70,130 @@ class StateMachine(object):
             exit()
         rospy.loginfo("%s: Connected to play_motion action server", self.node_name)
 
+        rospy.loginfo("%s: Waiting for move_base action server...", self.node_name)
+        self.move_base_ac = SimpleActionClient("/move_base", MoveBaseAction)
+        if not self.move_base_ac.wait_for_server(rospy.Duration(1000)):
+            rospy.logerr("%s: Could not connect to /move_base action server", self.node_name)
+            exit()
+        rospy.loginfo("%s: Connected to move_base action server", self.node_name)
+
         # Init state machine
-        self.state = 0
+        self.init_state = 1
+        self.state = self.init_state
         rospy.sleep(3)
         self.check_states()
 
+    def move_base_cb(self):
+        pass
+
+    def odom_cb(self, msg: Odometry):
+        self.robot_pose = msg.pose.pose
+        self.robot_vel = msg.twist.twist
+
+    def pick_pose_cb(self, msg: PoseStamped):
+        self.pick_pose = msg
+    
+    def place_pose_cb(self, msg: PoseStamped):
+        self.place_pose = msg
+
+    # TODO
+    def turn_and_go(self, goal: PoseStamped):
+        if self.robot_pose is None or self.robot_vel is None:
+            rospy.loginfo('Still waiting for odometry. Will not move.')
+            return False
+        
+        rate = rospy.Rate(10)
+
+        # turn
+        robot_euler = euler_from_quaternion([self.robot_pose.orientation.w, self.robot_pose.orientation.x, self.robot_pose.orientation.y, self.robot_pose.orientation.z])
+        goal_euler = euler_from_quaternion([goal.pose.orientation.w, goal.pose.orientation.x, goal.pose.orientation.y, goal.pose.orientation.z])
+
+        rospy.loginfo('Turning')
+        while robot_euler[2] - goal_euler[2] > 0.1:
+            move_msg = Twist()
+            move_msg.angular.z = 0.1
+            self.cmd_vel_pub.publish(move_msg)
+            rate.sleep()
+
+        # go
+        robot_pos = np.array([self.robot_pose.position.x, self.robot_pose.position.y, self.robot_pose.position.z])
+        goal_pos = np.array([goal.pose.position.x, goal.pose.position.y, goal.pose.position.z])
+        rospy.loginfo(f'Going from {robot_pos} to {goal_pos}')
+        while np.linalg.norm(robot_pos - goal_pos) > 0.3:
+            rospy.loginfo('Position error = %s', str(np.linalg.norm(robot_pos - goal_pos)))
+            move_msg = Twist()
+            move_msg.linear.x = 0.5
+            self.cmd_vel_pub.publish(move_msg)
+            rate.sleep()
+
+        return True
+    
+        # Example
+        # move_msg = Twist()
+        # move_msg.linear.x = 1
+
+        # rate = rospy.Rate(10)
+        # converged = False
+        # cnt = 0
+        # rospy.loginfo("%s: Moving towards door", self.node_name)
+        # while not rospy.is_shutdown() and cnt < 2:
+        #     self.cmd_vel_pub.publish(move_msg)
+        #     rate.sleep()
+        #     cnt = cnt + 1
+
+        # self.state = 1
+        # rospy.sleep(1)
+
+    def go_to_next_state(self):
+        self.state += 1
 
     def check_states(self):
+        while not rospy.is_shutdown() and self.state != 4:
+            # State 0: go to pick pose
+            if self.state == 0:
+                goal = MoveBaseGoal()
+                goal.target_pose = self.pick_pose
+                self.move_base_ac.send_goal(goal)
+                self.move_base_ac.wait_for_result()
+                self.go_to_next_state()
+                rospy.sleep(1)
 
-        # while not rospy.is_shutdown() and self.state != 4:
-            
-            # State 0: Move the robot "manually" to door
-            # if self.state == 0:
-            #     move_msg = Twist()
-            #     move_msg.linear.x = 1
+            # State 1: pick object
+            if self.state == 1:
+                # move head down to detect aruco
+                result = self.move_head_srv('down')
+                # call pick_srv service (type SetBool)
+                result = self.pick_srv()
+                while result.success != True:
+                    result = self.pick_srv()
 
-            #     rate = rospy.Rate(10)
-            #     converged = False
-            #     cnt = 0
-            #     rospy.loginfo("%s: Moving towards door", self.node_name)
-            #     while not rospy.is_shutdown() and cnt < 2:
-            #         self.cmd_vel_pub.publish(move_msg)
-            #         rate.sleep()
-            #         cnt = cnt + 1
+                self.go_to_next_state()
+                rospy.sleep(1)
+                
+            # State 2: go to place pose
+            if self.state == 2:
+                goal = MoveBaseGoal()
+                goal.target_pose = self.place_pose
+                self.move_base_ac.send_goal(goal)
+                self.move_base_ac.wait_for_result()
+                self.go_to_next_state()
+                rospy.sleep(1)
 
-            #     self.state = 1
-            #     rospy.sleep(1)
+            # State 3: place object
+            if self.state == 3:
+                result = self.place_srv()
+                while result.success != True:
+                    result = self.place_srv()
 
-            # # State 1:  Tuck arm 
-            # if self.state == 1:
-            #     rospy.loginfo("%s: Tucking the arm...", self.node_name)
-            #     goal = PlayMotionGoal()
-            #     goal.motion_name = 'home'
-            #     goal.skip_planning = True
-            #     self.play_motion_ac.send_goal(goal)
-            #     success_tucking = self.play_motion_ac.wait_for_result(rospy.Duration(100.0))
+                self.go_to_next_state()
+                rospy.sleep(1)
 
-            #     if success_tucking:
-            #         rospy.loginfo("%s: Arm tuck: ", self.play_motion_ac.get_result())
-            #         self.state = 2
-            #     else:
-            #         self.play_motion_ac.cancel_goal()
-            #         rospy.logerr("%s: play_motion failed to tuck arm, reset simulation", self.node_name)
-            #         self.state = 5
+            # Error handling
+            if self.state == 5:
+                rospy.logerr("%s: State machine failed. Check your code and try again!", self.node_name)
+                return
 
-            #     rospy.sleep(1)
-
-            # # # State 2:  Move the robot "manually" to chair
-            # if self.state == 2:
-            #     move_msg = Twist()
-            #     move_msg.angular.z = -1
-
-            #     rate = rospy.Rate(10)
-            #     converged = False
-            #     cnt = 0
-            #     rospy.loginfo("%s: Moving towards table", self.node_name)
-            #     while not rospy.is_shutdown() and cnt < 5:
-            #         self.cmd_vel_pub.publish(move_msg)
-            #         rate.sleep()
-            #         cnt = cnt + 1
-
-            #     move_msg.linear.x = 1
-            #     move_msg.angular.z = 0
-            #     cnt = 0
-            #     while not rospy.is_shutdown() and cnt < 15:
-            #         self.cmd_vel_pub.publish(move_msg)
-            #         rate.sleep()
-            #         cnt = cnt + 1
-
-            #     self.state = 3
-            #     rospy.sleep(1)
-
-            # # State 3:  Lower robot head service
-            # if self.state == 2:
-            #     try:
-            #         rospy.loginfo("%s: Lowering robot head", self.node_name)
-            #         move_head_srv = rospy.ServiceProxy(self.mv_head_srv_nm, MoveHead)
-            #         move_head_req = move_head_srv("down")
-                    
-            #         if move_head_req.success == True:
-            #             self.state = 4
-            #             rospy.loginfo("%s: Move head down succeded!", self.node_name)
-            #         else:
-            #             rospy.loginfo("%s: Move head down failed!", self.node_name)
-            #             self.state = 5
-
-            #         rospy.sleep(3)
-
-            #     except rospy.ServiceException as e:
-            #         print("Service call to move_head server failed: %s"%e)
-
-            # # Error handling
-            # if self.state == 5:
-            #     rospy.logerr("%s: State machine failed. Check your code and try again!", self.node_name)
-            #     return
-
-        # rospy.loginfo("%s: State machine finished!", self.node_name)
+        rospy.loginfo("%s: State machine finished!", self.node_name)
         return
 
 

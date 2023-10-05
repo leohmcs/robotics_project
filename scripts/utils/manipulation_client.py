@@ -114,7 +114,7 @@ class ManipulateAruco(object):
 		self.tfBuffer = tf2_ros.Buffer()
 		self.tf_l = tf2_ros.TransformListener(self.tfBuffer)
 		        
-		rospy.loginfo("Waiting for /pickup_pose AS...")
+		rospy.loginfo("Waiting for /pickup_pose AS... %s", self.pickup_pose_top)
 		self.pick_as = SimpleActionClient(self.pickup_pose_top, PickUpPoseAction)
 		self.pick_as.wait_for_server()
 
@@ -203,12 +203,12 @@ class ManipulateAruco(object):
 			if (str(moveit_error_dict[result.error_code]) != "SUCCESS"
 				and str(moveit_error_dict[result.error_code]) != "MOTION_PLAN_INVALIDATED_BY_ENVIRONMENT_CHANGE"
 				and str(moveit_error_dict[result.error_code]) != "CONTROL_FAILED"):
-				rospy.logerr("Failed to pick, not trying further")
+				rospy.logerr("Failed to pick, not trying further. Error code: %s", str(moveit_error_dict[result.error_code]))
 				success = False
 			else: 
 				success = True
 					
-			#  self.prepare_robot_nav()
+			# self.prepare_robot_nav()
 			return success
 
 		if string_operation == "place":
